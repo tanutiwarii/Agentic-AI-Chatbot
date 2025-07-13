@@ -24,22 +24,22 @@ from typing import Any, List, Optional
 
 # Import GitHub tools
 try:
-    from tools.github_tools import CreateFileTool, PushToGitHubTool, TriggerWorkflowTool, CheckWorkflowStatusTool
+    from tools.github_tools import CreateFileTool, PushToGitHubTool, TriggerWorkflowTool, CheckWorkflowStatusTool  # type: ignore
 except ImportError:
     # Create dummy tools if not available
-    class CreateFileTool:
+    class CreateFileTool:  # type: ignore
         def _run(self, filename, content):
             return f"File {filename} would be created with content: {content[:50]}..."
     
-    class PushToGitHubTool:
+    class PushToGitHubTool:  # type: ignore
         def _run(self, filename, commit_message):
             return f"File {filename} would be pushed to GitHub with message: {commit_message}"
     
-    class TriggerWorkflowTool:
+    class TriggerWorkflowTool:  # type: ignore
         def _run(self):
             return "GitHub Actions workflow would be triggered"
     
-    class CheckWorkflowStatusTool:
+    class CheckWorkflowStatusTool:  # type: ignore
         def _run(self):
             return "Workflow status would be checked"
 
