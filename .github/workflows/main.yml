@@ -1,0 +1,59 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        
+    - name: Run tests
+      run: |
+        echo "Running tests..."
+        # Add your test commands here
+        # python -m pytest
+        # python -m unittest discover
+        
+    - name: Lint code
+      run: |
+        echo "Linting code..."
+        # Add your linting commands here
+        # flake8 .
+        # black --check .
+        
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Build application
+      run: |
+        echo "Building application..."
+        # Add your build commands here
+        
+    - name: Deploy (example)
+      run: |
+        echo "Deploying application..."
+        # Add your deployment commands here 

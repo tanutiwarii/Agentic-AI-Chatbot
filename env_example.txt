@@ -1,0 +1,10 @@
+# GitHub Configuration
+GITHUB_TOKEN=your_github_personal_access_token
+GITHUB_REPO=your_username/your_repository_name
+GITHUB_OWNER=your_github_username
+GITHUB_REPO_NAME=your_repository_name
+GITHUB_BRANCH=main
+
+
+# Option 2: Ollama (local LLM)
+OLLAMA_BASE_URL=http://localhost:11434 

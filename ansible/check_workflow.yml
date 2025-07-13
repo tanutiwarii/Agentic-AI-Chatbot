@@ -1,0 +1,56 @@
+---
+- name: Check GitHub Actions Status
+  hosts: localhost
+  gather_facts: false
+  vars:
+    github_token: "{{ lookup('env', 'GITHUB_TOKEN') }}"
+    github_owner: "{{ lookup('env', 'GITHUB_OWNER') }}"
+    github_repo: "{{ lookup('env', 'GITHUB_REPO_NAME') }}"
+  
+  tasks:
+    - name: Validate environment variables
+      fail:
+        msg: "Missing required environment variable: {{ item }}"
+      when: lookup('env', item) is not defined
+      loop:
+        - GITHUB_TOKEN
+        - GITHUB_OWNER
+        - GITHUB_REPO_NAME
+
+    - name: Get latest workflow runs
+      uri:
+        url: "https://api.github.com/repos/{{ github_owner }}/{{ github_repo }}/actions/runs"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ github_token }}"
+          Accept: "application/vnd.github.v3+json"
+        return_content: yes
+      register: workflow_runs
+      failed_when: workflow_runs.status != 200
+
+    - name: Display workflow status
+      debug:
+        msg: |
+          📊 GitHub Actions Status:
+          Total runs: {{ workflow_runs.json.workflow_runs | length }}
+          {% if workflow_runs.json.workflow_runs %}
+          Latest run: {{ workflow_runs.json.workflow_runs[0].name }}
+          Status: {{ workflow_runs.json.workflow_runs[0].status }}
+          Conclusion: {{ workflow_runs.json.workflow_runs[0].conclusion }}
+          {% else %}
+          No workflow runs found
+          {% endif %}
+
+    - name: Check if latest workflow was successful
+      fail:
+        msg: "❌ Latest workflow '{{ workflow_runs.json.workflow_runs[0].name }}' failed with conclusion: {{ workflow_runs.json.workflow_runs[0].conclusion }}"
+      when: 
+        - workflow_runs.json.workflow_runs | length > 0
+        - workflow_runs.json.workflow_runs[0].conclusion not in ['success', 'skipped']
+
+    - name: Success message
+      debug:
+        msg: "✅ All workflows are passing successfully!"
+      when: 
+        - workflow_runs.json.workflow_runs | length > 0
+        - workflow_runs.json.workflow_runs[0].conclusion in ['success', 'skipped']
