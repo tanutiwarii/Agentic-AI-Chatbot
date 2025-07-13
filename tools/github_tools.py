@@ -52,8 +52,13 @@ class PushToGitHubTool(BaseTool):
                 remote_url = f"https://github.com/{owner}/{repo_name}.git"
                 origin = repo.create_remote('origin', remote_url)
             
-            # Add file to git
-            repo.git.add(filename)
+            # Check if there are any changes to commit
+            repo.git.add('.')  # Add all changes including the new file
+            
+            # Check if there are staged changes
+            if not repo.index.diff('HEAD'):
+                # No changes to commit
+                return f"⚠️ No changes to commit for '{filename}'. File may already be committed or unchanged."
             
             # Commit changes
             repo.git.commit(m=commit_msg)
