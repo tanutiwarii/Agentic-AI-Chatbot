@@ -214,7 +214,66 @@ def set_last_generated_code(code):
 def get_last_generated_code():
     return getattr(st.session_state, 'last_generated_code', None)
 
-# Enhance process_chat_message to detect chaining intent
+# Store last created file for download and GitHub push
+def set_last_created_file(filename, content):
+    st.session_state.last_created_file = {'filename': filename, 'content': content}
+
+def get_last_created_file():
+    return getattr(st.session_state, 'last_created_file', None)
+
+# Add handler for push to GitHub after file creation
+def process_push_last_file_to_github():
+    last_file = get_last_created_file()
+    if not last_file:
+        msg = "No file was created recently. Please create a file first."
+        st.session_state.messages.append({"role": "assistant", "content": msg})
+        with st.chat_message("assistant"):
+            st.markdown(msg)
+        return
+    filename = last_file['filename']
+    content = last_file['content']
+    with st.spinner(f"Pushing {filename} to GitHub..."):
+        try:
+            push_tool = PushToGitHubTool()
+            push_result = push_tool._run(filename, "Add file via assistant")
+            msg = f"✅ File {filename} pushed to GitHub!\nGitHub Push: {push_result}"
+            st.session_state.messages.append({"role": "assistant", "content": msg})
+            with st.chat_message("assistant"):
+                st.markdown(msg)
+        except Exception as e:
+            err = f"❌ Failed to push file: {str(e)}"
+            st.session_state.messages.append({"role": "assistant", "content": err})
+            with st.chat_message("assistant"):
+                st.markdown(err)
+    st.session_state.needs_save = True
+    return
+
+# Multi-step file creation state
+FILE_CREATION_STEPS = [
+    'ask_filename',
+    'ask_content_source',
+    'ask_generate_description',
+    'create_file_confirm',
+]
+
+def reset_file_creation_state():
+    st.session_state.file_creation = {
+        'step': 'ask_filename',
+        'filename': None,
+        'content_source': None,  # 'existing', 'generate', 'user'
+        'content': None,
+        'generate_desc': None,
+    }
+
+def get_file_creation_state():
+    if 'file_creation' not in st.session_state:
+        reset_file_creation_state()
+    return st.session_state.file_creation
+
+# Always route input to file creation flow if active
+def is_file_creation_active():
+    return 'file_creation' in st.session_state and st.session_state.file_creation.get('step') not in (None, 'done')
+
 def process_chat_message(user_message):
     """Process user message and return appropriate response and action"""
     
@@ -240,6 +299,16 @@ def process_chat_message(user_message):
             "response": None,
             "needs_input": False,
             "input_type": None
+        }
+    
+    # Multi-step file creation
+    if any(word in message_lower for word in ["create file", "make file", "new file"]):
+        reset_file_creation_state()
+        return {
+            "action": "file_creation_flow",
+            "response": None,
+            "needs_input": True,
+            "input_type": "file_creation_flow"
         }
     
     # File creation commands
@@ -322,6 +391,15 @@ def process_chat_message(user_message):
 - "Give me Python code for sum of n numbers"
 
 What would you like to do?""",
+            "needs_input": False,
+            "input_type": None
+        }
+    
+    # Push last created file to GitHub
+    if ("push" in message_lower or "github" in message_lower) and ("this file" in message_lower or "last file" in message_lower or "recent file" in message_lower):
+        return {
+            "action": "push_last_file_to_github",
+            "response": None,
             "needs_input": False,
             "input_type": None
         }
@@ -895,6 +973,12 @@ def process_voice_input(user_input, conversation_history):
                     speak(err)
             st.session_state.needs_save = True
             return
+        elif result["action"] == "file_creation_flow":
+            process_file_creation_flow(user_input)
+            return
+        elif result["action"] == "push_last_file_to_github":
+            process_push_last_file_to_github()
+            return
         else:
             # Handle file management commands
             if result["response"]:
@@ -919,6 +1003,10 @@ def process_voice_input(user_input, conversation_history):
 
 def process_text_input(user_prompt, conversation_history):
     """Process text input and handle both regular chat and file management commands"""
+    # Always handle file creation flow if active
+    if is_file_creation_active():
+        process_file_creation_flow(user_prompt)
+        return
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     
@@ -980,6 +1068,12 @@ def process_text_input(user_prompt, conversation_history):
                         st.markdown(err)
                     speak(err)
             st.session_state.needs_save = True
+            return
+        elif result["action"] == "file_creation_flow":
+            process_file_creation_flow(user_prompt)
+            return
+        elif result["action"] == "push_last_file_to_github":
+            process_push_last_file_to_github()
             return
         else:
             # Handle file management commands
@@ -1146,6 +1240,121 @@ def handle_pending_action(user_input, conversation_history):
         st.session_state.waiting_for_input = False
         st.session_state.current_action = None
         st.session_state.input_type = None
+
+def process_file_creation_flow(user_input):
+    state = get_file_creation_state()
+    import re
+    # Step 1: Ask for filename
+    if state['step'] == 'ask_filename':
+        match = re.search(r"([\w\-.]+\.(py|js|html|css|json|txt|md))", user_input)
+        filename = match.group(1) if match else None
+        if filename:
+            state['filename'] = filename
+            state['step'] = 'ask_content_source'
+        else:
+            st.session_state.messages.append({"role": "assistant", "content": "What should the filename be? (e.g. hello.py)"})
+            with st.chat_message("assistant"):
+                st.markdown("What should the filename be? (e.g. hello.py)")
+            return
+    # Step 2: Ask for content source
+    if state['step'] == 'ask_content_source':
+        st.session_state.messages.append({"role": "assistant", "content": "How do you want to provide the file content?\n1. Use previous code\n2. Generate new code\n3. I'll type/paste it myself\n(Reply with 1, 2, or 3)"})
+        with st.chat_message("assistant"):
+            st.markdown("How do you want to provide the file content?\n1. Use previous code\n2. Generate new code\n3. I'll type/paste it myself\n(Reply with 1, 2, or 3)")
+        state['step'] = 'await_content_source_choice'
+        return
+    if state['step'] == 'await_content_source_choice':
+        choice = user_input.strip().lower()
+        if choice in ('1', 'previous', 'use previous code'):
+            code = get_last_generated_code()
+            if not code:
+                msg = "No code was generated previously. Please ask for code first or choose another option."
+                st.session_state.messages.append({"role": "assistant", "content": msg})
+                with st.chat_message("assistant"):
+                    st.markdown(msg)
+                reset_file_creation_state()
+                return
+            state['content_source'] = 'existing'
+            state['content'] = code
+            state['step'] = 'show_code_and_confirm'
+        elif choice in ('2', 'generate', 'generate new code'):
+            state['content_source'] = 'generate'
+            state['step'] = 'ask_generate_description'
+            st.session_state.messages.append({"role": "assistant", "content": "What should the file do? (Describe the code to generate)"})
+            with st.chat_message("assistant"):
+                st.markdown("What should the file do? (Describe the code to generate)")
+            return
+        elif choice in ('3', 'type', 'paste', 'myself', "i'll type", "i'll paste"):
+            state['content_source'] = 'user'
+            state['step'] = 'await_user_content'
+            st.session_state.messages.append({"role": "assistant", "content": "Please type or paste the file content now."})
+            with st.chat_message("assistant"):
+                st.markdown("Please type or paste the file content now.")
+            return
+        else:
+            st.session_state.messages.append({"role": "assistant", "content": "Please reply with 1 (previous code), 2 (generate), or 3 (type/paste)."})
+            with st.chat_message("assistant"):
+                st.markdown("Please reply with 1 (previous code), 2 (generate), or 3 (type/paste).")
+            return
+    if state['step'] == 'await_user_content':
+        state['content'] = user_input
+        state['step'] = 'show_code_and_confirm'
+    if state['step'] == 'ask_generate_description':
+        desc = user_input.strip()
+        if desc:
+            code = generate_code_response(desc)
+            state['content'] = code
+            state['step'] = 'show_code_and_confirm'
+        else:
+            st.session_state.messages.append({"role": "assistant", "content": "Please describe what the file should do."})
+            with st.chat_message("assistant"):
+                st.markdown("Please describe what the file should do.")
+            return
+    # New step: show code and ask for confirmation
+    if state['step'] == 'show_code_and_confirm':
+        code = state['content']
+        st.session_state.messages.append({"role": "assistant", "content": f"Here is the code that will be used for the file:\n\n```python\n{code}\n```\n\nDo you want to create the file with this code? (yes/no)"})
+        with st.chat_message("assistant"):
+            st.markdown(f"Here is the code that will be used for the file:\n\n```python\n{code}\n```\n\nDo you want to create the file with this code? (yes/no)")
+        state['step'] = 'await_code_confirm'
+        return
+    if state['step'] == 'await_code_confirm':
+        if user_input.strip().lower() in ('yes', 'y', 'ok', 'sure', 'create', 'confirm'):  # Accept various confirmations
+            state['step'] = 'create_file_confirm'
+        else:
+            st.session_state.messages.append({"role": "assistant", "content": "File creation cancelled."})
+            with st.chat_message("assistant"):
+                st.markdown("File creation cancelled.")
+            state['step'] = 'done'
+        return
+    if state['step'] == 'create_file_confirm':
+        filename = state['filename']
+        content = state['content']
+        with st.spinner(f"Creating file {filename}..."):
+            try:
+                create_tool = CreateFileTool()
+                create_result = create_tool._run(filename, content)
+                set_last_created_file(filename, content)
+                msg = f"✅ File {filename} created!\n---\n{create_result}"
+                st.session_state.messages.append({"role": "assistant", "content": msg})
+                with st.chat_message("assistant"):
+                    st.markdown(msg)
+                    # Download button
+                    st.download_button(
+                        label=f"Download {filename}",
+                        data=content,
+                        file_name=filename,
+                        mime="text/plain"
+                    )
+                state['step'] = 'done'
+            except Exception as e:
+                err = f"❌ Failed to create file: {str(e)}"
+                st.session_state.messages.append({"role": "assistant", "content": err})
+                with st.chat_message("assistant"):
+                    st.markdown(err)
+                state['step'] = 'done'
+        st.session_state.needs_save = True
+        return
 
 if __name__ == "__main__":
     main()
