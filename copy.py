@@ -274,6 +274,25 @@ def get_file_creation_state():
 def is_file_creation_active():
     return 'file_creation' in st.session_state and st.session_state.file_creation.get('step') not in (None, 'done')
 
+# GitHub push state management
+def reset_github_push_state():
+    st.session_state.github_push = {
+        'step': 'ask_source',
+        'source': None,  # 'upload', 'paste', 'last_file'
+        'filename': None,
+        'content': None,
+        'uploaded_file': None,
+    }
+
+def get_github_push_state():
+    if 'github_push' not in st.session_state:
+        reset_github_push_state()
+    return st.session_state.github_push
+
+def is_github_push_active():
+    return 'github_push' in st.session_state and st.session_state.github_push.get('step') not in (None, 'done')
+
+# Update process_chat_message to detect GitHub push intent
 def process_chat_message(user_message):
     """Process user message and return appropriate response and action"""
     
@@ -320,13 +339,14 @@ def process_chat_message(user_message):
             "input_type": "file_creation"
         }
     
-    # GitHub push commands
+    # GitHub push commands (enhanced)
     elif any(word in message_lower for word in ["push", "commit", "upload"]) and any(word in message_lower for word in ["github", "repo", "repository"]):
+        reset_github_push_state()
         return {
-            "action": "push_github",
-            "response": "I'll help you push files to GitHub! Please provide the filename and commit message.",
+            "action": "github_push_flow",
+            "response": None,
             "needs_input": True,
-            "input_type": "github_push"
+            "input_type": "github_push_flow"
         }
     
     # Workflow trigger commands
@@ -885,6 +905,10 @@ def main():
         elif st.session_state.input_type == "complete_workflow":
             st.write("**Example:** `hello.py` or `Create a Python file called hello.py`")
     
+    # After displaying chat messages and before chat input:
+    if is_github_push_active() and get_github_push_state()['step'] == 'upload_file':
+        render_github_file_uploader()
+
     # Chat input using Streamlit's native chat input
     if user_prompt := st.chat_input("What would you like to do? (Try 'help' for commands)"):
         # Set flag to hide welcome message immediately
@@ -979,6 +1003,9 @@ def process_voice_input(user_input, conversation_history):
         elif result["action"] == "push_last_file_to_github":
             process_push_last_file_to_github()
             return
+        elif result["action"] == "github_push_flow":
+            process_github_push_flow(user_input)
+            return
         else:
             # Handle file management commands
             if result["response"]:
@@ -1006,6 +1033,10 @@ def process_text_input(user_prompt, conversation_history):
     # Always handle file creation flow if active
     if is_file_creation_active():
         process_file_creation_flow(user_prompt)
+        return
+    # Always handle GitHub push flow if active
+    if is_github_push_active():
+        process_github_push_flow(user_prompt)
         return
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": user_prompt})
@@ -1074,6 +1105,9 @@ def process_text_input(user_prompt, conversation_history):
             return
         elif result["action"] == "push_last_file_to_github":
             process_push_last_file_to_github()
+            return
+        elif result["action"] == "github_push_flow":
+            process_github_push_flow(user_prompt)
             return
         else:
             # Handle file management commands
@@ -1242,6 +1276,8 @@ def handle_pending_action(user_input, conversation_history):
         st.session_state.input_type = None
 
 def process_file_creation_flow(user_input):
+    # Always show user input in chat
+    st.session_state.messages.append({"role": "user", "content": user_input})
     state = get_file_creation_state()
     import re
     # Step 1: Ask for filename
@@ -1355,6 +1391,133 @@ def process_file_creation_flow(user_input):
                 state['step'] = 'done'
         st.session_state.needs_save = True
         return
+
+def process_github_push_flow(user_input):
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    state = get_github_push_state()
+    
+    # Step 1: Ask for source
+    if state['step'] == 'ask_source':
+        st.session_state.messages.append({"role": "assistant", "content": "How do you want to push to GitHub?\n1. Upload an existing file\n2. Paste content with filename\n3. Use the last created file\n(Reply with 1, 2, or 3)"})
+        with st.chat_message("assistant"):
+            st.markdown("How do you want to push to GitHub?\n1. Upload an existing file\n2. Paste content with filename\n3. Use the last created file\n(Reply with 1, 2, or 3)")
+        state['step'] = 'await_source_choice'
+        return
+    
+    # Step 2: Handle source choice
+    if state['step'] == 'await_source_choice':
+        choice = user_input.strip().lower()
+        if choice in ('1', 'upload', 'existing file'):
+            state['source'] = 'upload'
+            state['step'] = 'upload_file'
+            st.session_state.messages.append({"role": "assistant", "content": "Please upload your file using the file uploader below."})
+            with st.chat_message("assistant"):
+                st.markdown("Please upload your file using the file uploader below.")
+            # The uploader will be rendered in the main script
+            return
+        elif choice in ('2', 'paste', 'content'):
+            state['source'] = 'paste'
+            state['step'] = 'ask_filename'
+            st.session_state.messages.append({"role": "assistant", "content": "What should the filename be? (e.g. my_script.py)"})
+            with st.chat_message("assistant"):
+                st.markdown("What should the filename be? (e.g. my_script.py)")
+            return
+        elif choice in ('3', 'last', 'last file', 'recent'):
+            last_file = get_last_created_file()
+            if not last_file:
+                msg = "No file was created recently. Please create a file first or choose another option."
+                st.session_state.messages.append({"role": "assistant", "content": msg})
+                with st.chat_message("assistant"):
+                    st.markdown(msg)
+                reset_github_push_state()
+                return
+            state['source'] = 'last_file'
+            state['filename'] = last_file['filename']
+            state['content'] = last_file['content']
+            state['step'] = 'push_to_github'
+            # Auto-trigger push
+            process_github_push(state['filename'], state['content'])
+            return
+        else:
+            st.session_state.messages.append({"role": "assistant", "content": "Please reply with 1 (upload), 2 (paste), or 3 (last file)."})
+            with st.chat_message("assistant"):
+                st.markdown("Please reply with 1 (upload), 2 (paste), or 3 (last file).")
+            return
+    
+    # Step 3: Handle filename for paste option
+    if state['step'] == 'ask_filename':
+        import re
+        match = re.search(r"([\w\-.]+\.(py|js|html|css|json|txt|md|java|cpp|c|php|rb|go|rs|swift|kt|scala|r|m|sql|sh|bat|yml|yaml|xml|csv|tsv))", user_input)
+        filename = match.group(1) if match else None
+        if filename:
+            state['filename'] = filename
+            state['step'] = 'ask_content'
+            st.session_state.messages.append({"role": "assistant", "content": "Please paste the file content now."})
+            with st.chat_message("assistant"):
+                st.markdown("Please paste the file content now.")
+            return
+        else:
+            st.session_state.messages.append({"role": "assistant", "content": "Please provide a valid filename with extension (e.g. my_script.py)"})
+            with st.chat_message("assistant"):
+                st.markdown("Please provide a valid filename with extension (e.g. my_script.py)")
+            return
+    
+    # Step 4: Handle content for paste option
+    if state['step'] == 'ask_content':
+        if user_input.strip():
+            state['content'] = user_input
+            state['step'] = 'push_to_github'
+            # Auto-trigger push
+            process_github_push(state['filename'], state['content'])
+            return
+        else:
+            st.session_state.messages.append({"role": "assistant", "content": "Please provide the file content."})
+            with st.chat_message("assistant"):
+                st.markdown("Please provide the file content.")
+            return
+
+def process_github_push(filename, content):
+    """Actually push the file to GitHub"""
+    with st.spinner(f"Pushing {filename} to GitHub..."):
+        try:
+            push_tool = PushToGitHubTool()
+            push_result = push_tool._run(filename, f"Add {filename} via assistant")
+            msg = f"✅ File {filename} pushed to GitHub!\nGitHub Push: {push_result}"
+            st.session_state.messages.append({"role": "assistant", "content": msg})
+            with st.chat_message("assistant"):
+                st.markdown(msg)
+        except Exception as e:
+            err = f"❌ Failed to push file: {str(e)}"
+            st.session_state.messages.append({"role": "assistant", "content": err})
+            with st.chat_message("assistant"):
+                st.markdown(err)
+    st.session_state.needs_save = True
+    reset_github_push_state()
+
+def render_github_file_uploader():
+    """Renders a file uploader for GitHub push."""
+    uploaded_file = st.file_uploader("Choose a file to upload", type=["txt", "py", "js", "html", "css", "json", "md", "java", "cpp", "c", "php", "rb", "go", "rs", "swift", "kt", "scala", "r", "m", "sql", "sh", "bat", "yml", "yaml", "xml", "csv", "tsv"])
+    if uploaded_file is not None:
+        filename = uploaded_file.name
+        if st.button(f"Upload and Push {filename}"):
+            content = uploaded_file.getvalue()
+            # Write the uploaded content to disk so the GitHub tool can find it
+            with open(filename, "wb") as f:
+                f.write(content)
+            try:
+                push_tool = PushToGitHubTool()
+                push_result = push_tool._run(filename, f"Add file uploaded via assistant: {filename}")
+                msg = f"✅ File {filename} pushed to GitHub!\nGitHub Push: {push_result}"
+                st.session_state.messages.append({"role": "assistant", "content": msg})
+                with st.chat_message("assistant"):
+                    st.markdown(msg)
+                speak(f"File {filename} pushed to GitHub.")
+            except Exception as e:
+                err = f"❌ Failed to push file: {str(e)}"
+                st.session_state.messages.append({"role": "assistant", "content": err})
+                with st.chat_message("assistant"):
+                    st.markdown(err)
+                speak(err)
 
 if __name__ == "__main__":
     main()
