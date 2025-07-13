@@ -1,0 +1,25 @@
+- name: Create GitHub repository
+  hosts: localhost
+  gather_facts: no
+  vars:
+    repo_name: "{{ lookup('env', 'REPO_NAME') | default('new-repo') }}"
+    repo_description: "{{ lookup('env', 'REPO_DESCRIPTION') | default('Repository created via Ansible') }}"
+    repo_private: "{{ lookup('env', 'REPO_PRIVATE') | default('false') | bool }}"
+  tasks:
+    - name: Create new repository
+      uri:
+        url: "https://api.github.com/user/repos"
+        method: POST
+        headers:
+          Authorization: "token {{ lookup('env','GITHUB_TOKEN') }}"
+          Accept: "application/vnd.github.v3+json"
+        body_format: json
+        body:
+          name: "{{ repo_name }}"
+          description: "{{ repo_description }}"
+          private: "{{ repo_private }}"
+          auto_init: true
+      register: result
+
+    - debug:
+        var: result 

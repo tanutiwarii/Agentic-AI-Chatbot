@@ -135,19 +135,60 @@ class CustomLLM(LLM):
         return "custom"
 
 # === Ansible Integration ===
-def run_ansible_check():
+def run_ansible_playbook(playbook):
     try:
         result = subprocess.run(
-            ["ansible-playbook", "ansible/check_workflow.yml"], 
+            ["ansible-playbook", "-i", "ansible/inventory.ini", playbook], 
             capture_output=True, 
             text=True,
             check=True
         )
         return result.stdout
     except subprocess.CalledProcessError as e:
-        return f"Ansible check failed: {e.stderr}"
+        return f"Ansible playbook failed:\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
     except FileNotFoundError:
         return "❌ Ansible not found. Please install Ansible first."
+    except Exception as e:
+        return f"Unexpected error running Ansible playbook: {str(e)}"
+
+def run_ansible_trigger_workflow():
+    return run_ansible_playbook("ansible/trigger_workflow.yml")
+
+def run_ansible_check_latest_status():
+    return run_ansible_playbook("ansible/check_latest_status.yml")
+
+def run_ansible_download_logs():
+    return run_ansible_playbook("ansible/download_logs.yml")
+
+def run_ansible_remediate_failure():
+    return run_ansible_playbook("ansible/remediate_failure.yml")
+
+def run_ansible_retry_failed_job():
+    return run_ansible_playbook("ansible/retry_failed_job.yml")
+
+def run_ansible_create_repository(repo_name="new-repo", repo_description="Repository created via Ansible", repo_private=False):
+    """Create a GitHub repository using Ansible with custom parameters"""
+    try:
+        # Set environment variables for the playbook
+        env = os.environ.copy()
+        env['REPO_NAME'] = repo_name
+        env['REPO_DESCRIPTION'] = repo_description
+        env['REPO_PRIVATE'] = str(repo_private).lower()
+        
+        result = subprocess.run(
+            ["ansible-playbook", "-i", "ansible/inventory.ini", "ansible/create_repository.yml"], 
+            capture_output=True, 
+            text=True,
+            env=env,
+            check=True
+        )
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        return f"Ansible playbook failed:\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
+    except FileNotFoundError:
+        return "❌ Ansible not found. Please install Ansible first."
+    except Exception as e:
+        return f"Unexpected error running Ansible playbook: {str(e)}"
 
 # === Complete Workflow Function ===
 def execute_complete_workflow(filename, content, commit_message="Add new file"):
@@ -376,6 +417,127 @@ def process_chat_message(user_message):
             "input_type": "complete_workflow"
         }
     
+    # Ansible workflow commands
+    if "trigger" in message_lower and "workflow" in message_lower:
+        return {
+            "action": "ansible_trigger_workflow",
+            "response": "I'll trigger the workflow using Ansible!",
+            "needs_input": False,
+            "input_type": None
+        }
+    if ("check" in message_lower or "status" in message_lower) and ("workflow" in message_lower or "run" in message_lower):
+        return {
+            "action": "ansible_check_latest_status",
+            "response": "I'll check the latest workflow run status using Ansible!",
+            "needs_input": False,
+            "input_type": None
+        }
+    if ("download" in message_lower or "get" in message_lower) and ("log" in message_lower or "logs" in message_lower):
+        return {
+            "action": "ansible_download_logs",
+            "response": "I'll download the latest workflow logs using Ansible!",
+            "needs_input": False,
+            "input_type": None
+        }
+    if ("remediate" in message_lower or "remediation" in message_lower or "fix" in message_lower) and ("failure" in message_lower or "fail" in message_lower):
+        return {
+            "action": "ansible_remediate_failure",
+            "response": "I'll remediate the workflow failure using Ansible!",
+            "needs_input": False,
+            "input_type": None
+        }
+    if ("retry" in message_lower or "rerun" in message_lower) and ("job" in message_lower or "workflow" in message_lower or "run" in message_lower):
+        return {
+            "action": "ansible_retry_failed_job",
+            "response": "I'll retry the failed workflow job using Ansible!",
+            "needs_input": False,
+            "input_type": None
+        }
+    
+    # Repository creation commands
+    if ("create" in message_lower or "make" in message_lower) and ("repo" in message_lower or "repository" in message_lower):
+        # Extract repository details from the message
+        import re
+        
+        # Look for repository name
+        repo_match = re.search(r"(?:called|named|name)\s+([a-zA-Z0-9_-]+)", message_lower)
+        repo_name = repo_match.group(1) if repo_match else "new-repo"
+        
+        # Look for description
+        desc_match = re.search(r"(?:description|desc|about)\s+(.+?)(?:\s+(?:private|public)|$)", message_lower)
+        repo_description = desc_match.group(1).strip() if desc_match else "Repository created via Ansible"
+        
+        # Check if private
+        repo_private = "private" in message_lower
+        
+        return {
+            "action": "ansible_create_repository",
+            "response": f"I'll create a GitHub repository named '{repo_name}' using Ansible!",
+            "needs_input": False,
+            "input_type": None,
+            "repo_name": repo_name,
+            "repo_description": repo_description,
+            "repo_private": repo_private
+        }
+    
+    # README creation commands (robust) - PRIORITIZE THIS ABOVE GENERIC FILE CREATION
+    if ("readme" in message_lower and "create" in message_lower) or ("readme.md" in message_lower and "create" in message_lower) or ("create" in message_lower and "readme" in message_lower) or ("make" in message_lower and "readme" in message_lower) or ("add" in message_lower and "readme" in message_lower):
+        import re
+        # Try to extract content after 'content:' or 'with content:'
+        content_match = re.search(r"content: (.+)", user_message, re.IGNORECASE)
+        if content_match:
+            readme_content = content_match.group(1).strip()
+        else:
+            # Default template
+            readme_content = "# Project Title\n\nA short description of the project.\n\n## Features\n- Feature 1\n- Feature 2\n\n## Installation\n\nInstructions here.\n\n## Usage\n\nHow to use this project.\n\n## License\n\nMIT"
+        return {
+            "action": "create_readme",
+            "response": f"I'll create a README.md file for you!",
+            "needs_input": False,
+            "input_type": None,
+            "filename": "README.md",
+            "content": readme_content
+        }
+
+    # README content generation commands
+    if ("generate" in message_lower and "readme" in message_lower):
+        # Use the code generation logic to generate README content
+        desc = user_message.replace("generate readme file content for", "").replace("generate readme content for", "").replace("generate readme for", "").strip()
+        if not desc:
+            desc = "a general project"
+        # Specialized prompt for README
+        code_prompt = f"""You are an expert at writing professional README.md files. Generate a complete, high-quality README.md for the following project (for a commercial website):\n\nProject description: {desc}\n\nThe README should include:\n- Project title\n- Description\n- Features\n- Installation instructions\n- Usage\n- License\n- Contact info (if appropriate)\n\nFormat the output as markdown, ready to be saved as README.md."""
+        import requests
+        ollama_url = "http://localhost:11434/api/generate"
+        payload = {
+            "model": "llama3.2:latest",
+            "prompt": code_prompt,
+            "stream": False,
+            "options": {
+                "temperature": 0.1,
+                "top_p": 0.9,
+                "repeat_penalty": 1.1
+            }
+        }
+        try:
+            response = requests.post(ollama_url, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            if "response" in result:
+                readme_content = result["response"]
+            else:
+                readme_content = "# Project Title\n\nA short description of the project."
+        except Exception as e:
+            readme_content = f"# Project Title\n\nA short description of the project.\n\n*Error generating README: {str(e)}*"
+        return {
+            "action": "create_readme",
+            "response": "Here's a generated README.md file for your project!",
+            "needs_input": False,
+            "input_type": None,
+            "filename": "README.md",
+            "content": readme_content
+        }
+    
     # Help commands
     elif any(word in message_lower for word in ["help", "what", "how", "commands"]):
         return {
@@ -390,10 +552,14 @@ def process_chat_message(user_message):
 🚀 **GitHub Operations:**
 - "Push to GitHub" or "Commit to repository"
 - "Upload file to GitHub"
+- "Create repository" or "Make repository"
 
-⚡ **Workflow Operations:**
+⚡ **Workflow Operations (Ansible):**
 - "Trigger workflow" or "Run GitHub Actions"
 - "Check workflow status" or "Monitor pipeline"
+- "Download logs" or "Get workflow logs"
+- "Remediate failure" or "Fix workflow failure"
+- "Retry failed job" or "Rerun workflow"
 
 🔄 **Complete Workflow:**
 - "Run complete workflow" or "Execute full pipeline"
@@ -405,8 +571,12 @@ def process_chat_message(user_message):
 💡 **Examples:**
 - "Create a Python file called hello.py"
 - "Push my changes to GitHub"
+- "Create repository called my-project description: My awesome project private"
 - "Trigger the workflow"
 - "Check the workflow status"
+- "Download logs"
+- "Remediate failure"
+- "Retry failed job"
 - "Run the complete workflow"
 - "Give me Python code for sum of n numbers"
 
@@ -772,7 +942,7 @@ def main():
     
     # Sidebar for conversation history and voice controls
     with st.sidebar:
-        st.markdown("<h1 style='font-size: 40px;'>🎙️ Voice Assistant</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='font-size: 40px;'>🎙️ Ask llama</h1>", unsafe_allow_html=True)
         st.caption("With File Management & GitHub Integration")
 
         # Add Clear Main Chat button
@@ -868,16 +1038,40 @@ def main():
         # --- TAB 3: CONFIGURATION ---
         with sidebar_tab3:
             st.subheader("⚙️ Configuration")
-            st.info("Make sure to set up your .env file with GitHub credentials")
-            
-            # Environment check
+         
+            # Environment check and editor
             st.subheader("🔧 Environment")
-            env_vars = {
-                "GITHUB_TOKEN": "✅ Set" if os.getenv("GITHUB_TOKEN") else "❌ Missing",
-                "GITHUB_OWNER": "✅ Set" if os.getenv("GITHUB_OWNER") else "❌ Missing", 
-                "GITHUB_REPO_NAME": "✅ Set" if os.getenv("GITHUB_REPO_NAME") else "❌ Missing",
-            }
+            # Load from session_state or os.environ
+            env_keys = ["GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO_NAME"]
+            env_values = {}
+            for key in env_keys:
+                env_values[key] = st.session_state.get(key, os.getenv(key, ""))
             
+            with st.form("env_form"):
+                github_token = st.text_input("GITHUB_TOKEN", value=env_values["GITHUB_TOKEN"], type="password")
+                github_owner = st.text_input("GITHUB_OWNER", value=env_values["GITHUB_OWNER"]) 
+                github_repo = st.text_input("GITHUB_REPO_NAME", value=env_values["GITHUB_REPO_NAME"]) 
+                submitted = st.form_submit_button("Save Environment")
+                if submitted:
+                    # Save to .env file
+                    with open(".env", "w") as f:
+                        f.write(f"GITHUB_TOKEN={github_token}\n")
+                        f.write(f"GITHUB_OWNER={github_owner}\n")
+                        f.write(f"GITHUB_REPO_NAME={github_repo}\n")
+                    # Update session_state and os.environ, ensure no None values
+                    st.session_state["GITHUB_TOKEN"] = github_token or ""
+                    st.session_state["GITHUB_OWNER"] = github_owner or ""
+                    st.session_state["GITHUB_REPO_NAME"] = github_repo or ""
+                    os.environ["GITHUB_TOKEN"] = github_token or ""
+                    os.environ["GITHUB_OWNER"] = github_owner or ""
+                    os.environ["GITHUB_REPO_NAME"] = github_repo or ""
+                    st.success("Environment variables saved and updated!")
+            # Show current status
+            env_vars = {
+                "GITHUB_TOKEN": "✅ Set" if github_token else "❌ Missing",
+                "GITHUB_OWNER": "✅ Set" if github_owner else "❌ Missing", 
+                "GITHUB_REPO_NAME": "✅ Set" if github_repo else "❌ Missing",
+            }
             for var, status in env_vars.items():
                 st.write(f"{var}: {status}")
             
@@ -1006,6 +1200,117 @@ def process_voice_input(user_input, conversation_history):
         elif result["action"] == "github_push_flow":
             process_github_push_flow(user_input)
             return
+        elif result["action"] == "ansible_trigger_workflow":
+            with st.spinner("Triggering workflow via Ansible..."):
+                result = run_ansible_trigger_workflow()
+                st.session_state.messages.append({"role": "assistant", "content": f"✅ Workflow triggered via Ansible:\n```\n{result}\n```"})
+                with st.chat_message("assistant"):
+                    st.markdown(f"✅ Workflow triggered via Ansible:\n```\n{result}\n```")
+                speak("Workflow triggered via Ansible.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "ansible_check_latest_status":
+            with st.spinner("Checking latest workflow status via Ansible..."):
+                result = run_ansible_check_latest_status()
+                st.session_state.messages.append({"role": "assistant", "content": f"📊 Latest workflow status via Ansible:\n```\n{result}\n```"})
+                with st.chat_message("assistant"):
+                    st.markdown(f"📊 Latest workflow status via Ansible:\n```\n{result}\n```")
+                speak("Latest workflow status checked.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "ansible_download_logs":
+            with st.spinner("Downloading workflow logs via Ansible..."):
+                result = run_ansible_download_logs()
+                log_path = "latest_workflow_logs.zip"
+                log_exists = os.path.exists(log_path)
+                msg = f"📥 Workflow logs downloaded via Ansible."
+                if log_exists:
+                    msg += f"\nYou can download the logs below."
+                msg += f"\n```\n{result}\n```"
+                st.session_state.messages.append({"role": "assistant", "content": msg})
+                with st.chat_message("assistant"):
+                    st.markdown(msg)
+                    if log_exists:
+                        with open(log_path, "rb") as f:
+                            st.download_button("Download Logs (ZIP)", f, file_name="latest_workflow_logs.zip")
+                speak("Workflow logs downloaded.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "ansible_remediate_failure":
+            with st.spinner("Remediating workflow failure via Ansible..."):
+                result = run_ansible_remediate_failure()
+                st.session_state.messages.append({"role": "assistant", "content": f"🛠️ Remediation performed via Ansible:\n```\n{result}\n```"})
+                with st.chat_message("assistant"):
+                    st.markdown(f"🛠️ Remediation performed via Ansible:\n```\n{result}\n```")
+                speak("Remediation performed.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "ansible_retry_failed_job":
+            with st.spinner("Retrying failed workflow job via Ansible..."):
+                result = run_ansible_retry_failed_job()
+                st.session_state.messages.append({"role": "assistant", "content": f"🔄 Retry of failed job via Ansible:\n```\n{result}\n```"})
+                with st.chat_message("assistant"):
+                    st.markdown(f"🔄 Retry of failed job via Ansible:\n```\n{result}\n```")
+                speak("Retry of failed job performed.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "ansible_create_repository":
+            repo_name = result.get("repo_name", "new-repo")
+            repo_description = result.get("repo_description", "Repository created via Ansible")
+            repo_private = result.get("repo_private", False)
+            with st.spinner(f"Creating GitHub repository '{repo_name}' via Ansible..."):
+                result = run_ansible_create_repository(repo_name, repo_description, repo_private)
+                st.session_state.messages.append({"role": "assistant", "content": f"📦 Repository creation via Ansible:\n```\n{result}\n```"})
+                with st.chat_message("assistant"):
+                    st.markdown(f"📦 Repository creation via Ansible:\n```\n{result}\n```")
+                speak(f"Repository {repo_name} created.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "create_readme":
+            filename = "README.md"
+            content = None
+            # Try to get content from the last chat command
+            for msg in reversed(st.session_state.messages):
+                if msg["role"] == "assistant" and "content" in msg:
+                    content = msg["content"]
+                    break
+            # Prefer the content from the action dict if present
+            if isinstance(result, dict):
+                content = result.get("content", content)
+            else:
+                content = getattr(result, "content", content)
+            if not content:
+                content = "# Project Title\n\nA short description of the project.\n\n## Features\n- Feature 1\n- Feature 2\n\n## Installation\n\nInstructions here.\n\n## Usage\n\nHow to use this project.\n\n## License\n\nMIT"
+            with st.spinner(f"Creating {filename}..."):
+                try:
+                    create_tool = CreateFileTool()
+                    create_result = create_tool._run(filename, content)
+                    set_last_created_file(filename, content)
+                    msg = f"✅ {filename} created!\n---\n{create_result}"
+                    st.session_state.messages.append({"role": "assistant", "content": msg})
+                    with st.chat_message("assistant"):
+                        st.markdown(msg)
+                        st.download_button(
+                            label=f"Download {filename}",
+                            data=content,
+                            file_name=filename,
+                            mime="text/markdown"
+                        )
+                        # Direct push to GitHub button
+                        if st.button(f"Push {filename} to GitHub", key=f"push_{filename}"):
+                            process_push_last_file_to_github()
+                            st.stop()
+                    # Offer to push to GitHub in chat as well
+                    st.session_state.messages.append({"role": "assistant", "content": f"Would you like to push this {filename} to GitHub? (yes/no) Or use the button above."})
+                    with st.chat_message("assistant"):
+                        st.markdown(f"Would you like to push this {filename} to GitHub? (yes/no) Or use the button above.")
+                except Exception as e:
+                    err = f"❌ Failed to create {filename}: {str(e)}"
+                    st.session_state.messages.append({"role": "assistant", "content": err})
+                    with st.chat_message("assistant"):
+                        st.markdown(err)
+            st.session_state.needs_save = True
+            return
         else:
             # Handle file management commands
             if result["response"]:
@@ -1109,6 +1414,117 @@ def process_text_input(user_prompt, conversation_history):
         elif result["action"] == "github_push_flow":
             process_github_push_flow(user_prompt)
             return
+        elif result["action"] == "ansible_trigger_workflow":
+            with st.spinner("Triggering workflow via Ansible..."):
+                result = run_ansible_trigger_workflow()
+                st.session_state.messages.append({"role": "assistant", "content": f"✅ Workflow triggered via Ansible:\n```\n{result}\n```"})
+                with st.chat_message("assistant"):
+                    st.markdown(f"✅ Workflow triggered via Ansible:\n```\n{result}\n```")
+                speak("Workflow triggered via Ansible.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "ansible_check_latest_status":
+            with st.spinner("Checking latest workflow status via Ansible..."):
+                result = run_ansible_check_latest_status()
+                st.session_state.messages.append({"role": "assistant", "content": f"📊 Latest workflow status via Ansible:\n```\n{result}\n```"})
+                with st.chat_message("assistant"):
+                    st.markdown(f"📊 Latest workflow status via Ansible:\n```\n{result}\n```")
+                speak("Latest workflow status checked.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "ansible_download_logs":
+            with st.spinner("Downloading workflow logs via Ansible..."):
+                result = run_ansible_download_logs()
+                log_path = "latest_workflow_logs.zip"
+                log_exists = os.path.exists(log_path)
+                msg = f"📥 Workflow logs downloaded via Ansible."
+                if log_exists:
+                    msg += f"\nYou can download the logs below."
+                msg += f"\n```\n{result}\n```"
+                st.session_state.messages.append({"role": "assistant", "content": msg})
+                with st.chat_message("assistant"):
+                    st.markdown(msg)
+                    if log_exists:
+                        with open(log_path, "rb") as f:
+                            st.download_button("Download Logs (ZIP)", f, file_name="latest_workflow_logs.zip")
+                speak("Workflow logs downloaded.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "ansible_remediate_failure":
+            with st.spinner("Remediating workflow failure via Ansible..."):
+                result = run_ansible_remediate_failure()
+                st.session_state.messages.append({"role": "assistant", "content": f"🛠️ Remediation performed via Ansible:\n```\n{result}\n```"})
+                with st.chat_message("assistant"):
+                    st.markdown(f"🛠️ Remediation performed via Ansible:\n```\n{result}\n```")
+                speak("Remediation performed.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "ansible_retry_failed_job":
+            with st.spinner("Retrying failed workflow job via Ansible..."):
+                result = run_ansible_retry_failed_job()
+                st.session_state.messages.append({"role": "assistant", "content": f"🔄 Retry of failed job via Ansible:\n```\n{result}\n```"})
+                with st.chat_message("assistant"):
+                    st.markdown(f"🔄 Retry of failed job via Ansible:\n```\n{result}\n```")
+                speak("Retry of failed job performed.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "ansible_create_repository":
+            repo_name = result.get("repo_name", "new-repo")
+            repo_description = result.get("repo_description", "Repository created via Ansible")
+            repo_private = result.get("repo_private", False)
+            with st.spinner(f"Creating GitHub repository '{repo_name}' via Ansible..."):
+                result = run_ansible_create_repository(repo_name, repo_description, repo_private)
+                st.session_state.messages.append({"role": "assistant", "content": f"📦 Repository creation via Ansible:\n```\n{result}\n```"})
+                with st.chat_message("assistant"):
+                    st.markdown(f"📦 Repository creation via Ansible:\n```\n{result}\n```")
+                speak(f"Repository {repo_name} created.")
+            st.session_state.needs_save = True
+            return
+        elif result["action"] == "create_readme":
+            filename = "README.md"
+            content = None
+            # Try to get content from the last chat command
+            for msg in reversed(st.session_state.messages):
+                if msg["role"] == "assistant" and "content" in msg:
+                    content = msg["content"]
+                    break
+            # Prefer the content from the action dict if present
+            if isinstance(result, dict):
+                content = result.get("content", content)
+            else:
+                content = getattr(result, "content", content)
+            if not content:
+                content = "# Project Title\n\nA short description of the project.\n\n## Features\n- Feature 1\n- Feature 2\n\n## Installation\n\nInstructions here.\n\n## Usage\n\nHow to use this project.\n\n## License\n\nMIT"
+            with st.spinner(f"Creating {filename}..."):
+                try:
+                    create_tool = CreateFileTool()
+                    create_result = create_tool._run(filename, content)
+                    set_last_created_file(filename, content)
+                    msg = f"✅ {filename} created!\n---\n{create_result}"
+                    st.session_state.messages.append({"role": "assistant", "content": msg})
+                    with st.chat_message("assistant"):
+                        st.markdown(msg)
+                        st.download_button(
+                            label=f"Download {filename}",
+                            data=content,
+                            file_name=filename,
+                            mime="text/markdown"
+                        )
+                        # Direct push to GitHub button
+                        if st.button(f"Push {filename} to GitHub", key=f"push_{filename}"):
+                            process_push_last_file_to_github()
+                            st.stop()
+                    # Offer to push to GitHub in chat as well
+                    st.session_state.messages.append({"role": "assistant", "content": f"Would you like to push this {filename} to GitHub? (yes/no) Or use the button above."})
+                    with st.chat_message("assistant"):
+                        st.markdown(f"Would you like to push this {filename} to GitHub? (yes/no) Or use the button above.")
+                except Exception as e:
+                    err = f"❌ Failed to create {filename}: {str(e)}"
+                    st.session_state.messages.append({"role": "assistant", "content": err})
+                    with st.chat_message("assistant"):
+                        st.markdown(err)
+            st.session_state.needs_save = True
+            return
         else:
             # Handle file management commands
             if result["response"]:
@@ -1149,18 +1565,108 @@ def execute_action(action, conversation_history):
                 speak(f"Failed to trigger workflow: {str(e)}")
     
     elif action == "check_status":
-        with st.spinner("Checking workflow status..."):
+        with st.spinner("Checking workflow status via Ansible..."):
+            result = run_ansible_check_latest_status()
+            st.session_state.messages.append({"role": "assistant", "content": f"📊 Workflow Status via Ansible:\n```\n{result}\n```"})
+            with st.chat_message("assistant"):
+                st.markdown(f"📊 Workflow Status via Ansible:\n```\n{result}\n```")
+            speak(f"Workflow status checked. {result[:100]}...")
+    elif action == "ansible_trigger_workflow":
+        with st.spinner("Triggering workflow via Ansible..."):
+            result = run_ansible_trigger_workflow()
+            st.session_state.messages.append({"role": "assistant", "content": f"✅ Workflow triggered via Ansible:\n```\n{result}\n```"})
+            with st.chat_message("assistant"):
+                st.markdown(f"✅ Workflow triggered via Ansible:\n```\n{result}\n```")
+            speak("Workflow triggered via Ansible.")
+    elif action == "ansible_check_latest_status":
+        with st.spinner("Checking latest workflow status via Ansible..."):
+            result = run_ansible_check_latest_status()
+            st.session_state.messages.append({"role": "assistant", "content": f"📊 Latest workflow status via Ansible:\n```\n{result}\n```"})
+            with st.chat_message("assistant"):
+                st.markdown(f"📊 Latest workflow status via Ansible:\n```\n{result}\n```")
+            speak("Latest workflow status checked.")
+    elif action == "ansible_download_logs":
+        with st.spinner("Downloading workflow logs via Ansible..."):
+            result = run_ansible_download_logs()
+            log_path = "latest_workflow_logs.zip"
+            log_exists = os.path.exists(log_path)
+            msg = f"📥 Workflow logs downloaded via Ansible."
+            if log_exists:
+                msg += f"\nYou can download the logs below."
+            msg += f"\n```\n{result}\n```"
+            st.session_state.messages.append({"role": "assistant", "content": msg})
+            with st.chat_message("assistant"):
+                st.markdown(msg)
+                if log_exists:
+                    with open(log_path, "rb") as f:
+                        st.download_button("Download Logs (ZIP)", f, file_name="latest_workflow_logs.zip")
+            speak("Workflow logs downloaded.")
+    elif action == "ansible_remediate_failure":
+        with st.spinner("Remediating workflow failure via Ansible..."):
+            result = run_ansible_remediate_failure()
+            st.session_state.messages.append({"role": "assistant", "content": f"🛠️ Remediation performed via Ansible:\n```\n{result}\n```"})
+            with st.chat_message("assistant"):
+                st.markdown(f"🛠️ Remediation performed via Ansible:\n```\n{result}\n```")
+            speak("Remediation performed.")
+    elif action == "ansible_retry_failed_job":
+        with st.spinner("Retrying failed workflow job via Ansible..."):
+            result = run_ansible_retry_failed_job()
+            st.session_state.messages.append({"role": "assistant", "content": f"🔄 Retry of failed job via Ansible:\n```\n{result}\n```"})
+            with st.chat_message("assistant"):
+                st.markdown(f"🔄 Retry of failed job via Ansible:\n```\n{result}\n```")
+            speak("Retry of failed job performed.")
+    elif action == "ansible_create_repository":
+        with st.spinner("Creating GitHub repository via Ansible..."):
+            result = run_ansible_create_repository()
+            st.session_state.messages.append({"role": "assistant", "content": f"📦 Repository creation via Ansible:\n```\n{result}\n```"})
+            with st.chat_message("assistant"):
+                st.markdown(f"📦 Repository creation via Ansible:\n```\n{result}\n```")
+            speak("Repository created.")
+    elif action == "create_readme":
+        filename = "README.md"
+        content = None
+        # Try to get content from the last chat command
+        for msg in reversed(st.session_state.messages):
+            if msg["role"] == "assistant" and "content" in msg:
+                content = msg["content"]
+                break
+        # Prefer the content from the action dict if present
+        if isinstance(action, dict):
+            content = action.get("content", content)
+        else:
+            content = getattr(action, "content", content)
+        if not content:
+            content = "# Project Title\n\nA short description of the project.\n\n## Features\n- Feature 1\n- Feature 2\n\n## Installation\n\nInstructions here.\n\n## Usage\n\nHow to use this project.\n\n## License\n\nMIT"
+        with st.spinner(f"Creating {filename}..."):
             try:
-                status_result = run_ansible_check()
-                st.session_state.messages.append({"role": "assistant", "content": f"📊 Workflow Status:\n```\n{status_result}\n```"})
+                create_tool = CreateFileTool()
+                create_result = create_tool._run(filename, content)
+                set_last_created_file(filename, content)
+                msg = f"✅ {filename} created!\n---\n{create_result}"
+                st.session_state.messages.append({"role": "assistant", "content": msg})
                 with st.chat_message("assistant"):
-                    st.markdown(f"📊 Workflow Status:\n```\n{status_result}\n```")
-                speak(f"Workflow status checked. {status_result[:100]}...")
+                    st.markdown(msg)
+                    st.download_button(
+                        label=f"Download {filename}",
+                        data=content,
+                        file_name=filename,
+                        mime="text/markdown"
+                    )
+                    # Direct push to GitHub button
+                    if st.button(f"Push {filename} to GitHub", key=f"push_{filename}"):
+                        process_push_last_file_to_github()
+                        st.stop()
+                # Offer to push to GitHub in chat as well
+                st.session_state.messages.append({"role": "assistant", "content": f"Would you like to push this {filename} to GitHub? (yes/no) Or use the button above."})
+                with st.chat_message("assistant"):
+                    st.markdown(f"Would you like to push this {filename} to GitHub? (yes/no) Or use the button above.")
             except Exception as e:
-                st.session_state.messages.append({"role": "assistant", "content": f"❌ Failed to check status: {str(e)}"})
+                err = f"❌ Failed to create {filename}: {str(e)}"
+                st.session_state.messages.append({"role": "assistant", "content": err})
                 with st.chat_message("assistant"):
-                    st.markdown(f"❌ Failed to check status: {str(e)}")
-                speak(f"Failed to check status: {str(e)}")
+                    st.markdown(err)
+        st.session_state.needs_save = True
+        return
 
 def generate_code_response(user_input):
     """Generate code response using a specialized prompt"""
@@ -1208,6 +1714,13 @@ Here's the Python code:"""
 
 def handle_pending_action(user_input, conversation_history):
     """Handle input for pending action"""
+    # Check if the last assistant message was a push prompt and user said yes
+    if user_input.strip().lower() in ("yes", "y", "ok", "sure", "push", "confirm"):
+        # Look for a recent assistant message that is a push prompt
+        for msg in reversed(st.session_state.messages):
+            if msg["role"] == "assistant" and "Would you like to push" in msg["content"]:
+                process_push_last_file_to_github()
+                return
     if st.session_state.current_action == "create_file":
         filename, content = extract_file_info_from_message(user_input)
         

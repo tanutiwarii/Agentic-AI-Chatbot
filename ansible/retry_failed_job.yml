@@ -1,0 +1,27 @@
+- name: Retry the latest failed workflow run
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Get latest workflow run
+      uri:
+        url: "https://api.github.com/repos/{{ lookup('env','GITHUB_OWNER') }}/{{ lookup('env','GITHUB_REPO_NAME') }}/actions/runs"
+        method: GET
+        headers:
+          Authorization: "token {{ lookup('env','GITHUB_TOKEN') }}"
+          Accept: "application/vnd.github.v3+json"
+      register: runs
+
+    - set_fact:
+        run_id: "{{ runs.json.workflow_runs[0].id }}"
+
+    - name: Re-run workflow
+      uri:
+        url: "https://api.github.com/repos/{{ lookup('env','GITHUB_OWNER') }}/{{ lookup('env','GITHUB_REPO_NAME') }}/actions/runs/{{ run_id }}/rerun"
+        method: POST
+        headers:
+          Authorization: "token {{ lookup('env','GITHUB_TOKEN') }}"
+          Accept: "application/vnd.github.v3+json"
+      register: rerun_result
+
+    - debug:
+        var: rerun_result 

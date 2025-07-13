@@ -1,0 +1,19 @@
+- name: Remediate workflow failure by opening an issue
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Create GitHub issue
+      uri:
+        url: "https://api.github.com/repos/{{ lookup('env','GITHUB_OWNER') }}/{{ lookup('env','GITHUB_REPO_NAME') }}/issues"
+        method: POST
+        headers:
+          Authorization: "token {{ lookup('env','GITHUB_TOKEN') }}"
+          Accept: "application/vnd.github.v3+json"
+        body_format: json
+        body:
+          title: "Automated remediation: Workflow failure detected"
+          body: "The latest workflow run failed. Please investigate."
+      register: result
+
+    - debug:
+        var: result 
